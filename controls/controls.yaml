@@ -1,0 +1,29 @@
+# Config-driven risk controls
+
+- control_id: ACH_INSTANT_LIMIT_NEW_ACCOUNT
+  rail: ACH
+  severity: HIGH
+  action: BLOCK
+  description: Block instant ACH over $5,000 for accounts under 30 days old.
+  conditions:
+    funding_speed: instant
+    amount_gt: 5000
+    account_age_lt_days: 30
+
+- control_id: CARD_HIGH_AMOUNT_NEW_DEVICE_REVIEW
+  rail: CARD
+  severity: MEDIUM
+  action: REVIEW
+  description: Review high-value card transactions on new devices.
+  conditions:
+    amount_gt: 800
+    is_new_device: true
+
+- control_id: CRYPTO_NEW_WALLET_LARGE_SEND_REVIEW
+  rail: CRYPTO
+  severity: MEDIUM
+  action: REVIEW
+  description: Review large sends from very new wallets.
+  conditions:
+    amount_gt: 2.0
+    wallet_age_lt_days: 7
