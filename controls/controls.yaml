@@ -8,14 +8,15 @@
   conditions:
     funding_speed: instant
     amount_gt: 5000
-    account_age_lt_days: 30
+    account_age_days_lt: 30
 
 - control_id: CARD_HIGH_AMOUNT_NEW_DEVICE_REVIEW
   rail: CARD
   severity: MEDIUM
   action: REVIEW
-  description: Review high-value card transactions on new devices.
+  description: Review high-value online card transactions on new devices.
   conditions:
+    card_present: false
     amount_gt: 800
     is_new_device: true
 
@@ -26,4 +27,12 @@
   description: Review large sends from very new wallets.
   conditions:
     amount_gt: 2.0
-    wallet_age_lt_days: 7
+    wallet_age_days_lt: 7
+
+- control_id: CRYPTO_HIGH_RISK_COUNTERPARTY_BLOCK
+  rail: CRYPTO
+  severity: HIGH
+  action: BLOCK
+  description: Block transfers to known high-risk counterparties.
+  conditions:
+    to_is_high_risk: true

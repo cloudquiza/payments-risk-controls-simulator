@@ -127,10 +127,11 @@ def generate_wallets(users: pd.DataFrame) -> pd.DataFrame:
 
 def generate_ach_transactions(users: pd.DataFrame, n: int = 2000) -> pd.DataFrame:
     """
-    Generate ACH-style transactions. We'll include fields used in controls such as:
-    - funding_speed (instant/standard)
-    - return_code (sometimes)
-    - amount
+    Generate ACH-style transactions.
+
+    Improvement:
+    - Inject a small number of high-value instant ACH events for new accounts
+      so the ACH control has something realistic to catch.
     """
     rows: List[Dict] = []
 
@@ -140,8 +141,15 @@ def generate_ach_transactions(users: pd.DataFrame, n: int = 2000) -> pd.DataFram
         u = users.sample(1).iloc[0]
 
         funding_speed = weighted_choice(["instant", "standard"], [0.25, 0.75])
+
+        # Base amount distribution
         amount = round(abs(random.gauss(mu=250, sigma=400)), 2)
         amount = max(5.0, min(amount, 12000.0))
+
+        # ✅ Improvement A: Inject some high-value instant ACH for new accounts
+        # This creates realistic “control-worthy” events without dominating the dataset.
+        if u["account_age_days"] < 30 and funding_speed == "instant" and random.random() < 0.08:
+            amount = round(random.uniform(5200, 12000), 2)
 
         # Return code occurs sometimes; high-risk returns are rarer but present
         return_code = random.choice(return_codes)
@@ -154,17 +162,24 @@ def generate_ach_transactions(users: pd.DataFrame, n: int = 2000) -> pd.DataFram
                 "user_id": u["user_id"],
                 "device_id": u["device_id"],
                 "country": u["country"],
+
+                # Included for controls/monitoring
+                "account_age_days": int(u["account_age_days"]),
+
                 "amount": amount,
                 "currency": "USD",
-                # ACH-specific but normalized into shared schema
+
+                # ACH fields
                 "funding_speed": funding_speed,
                 "return_code": return_code,
-                # Card fields (unused for ACH)
+
+                # Card fields
                 "card_present": None,
                 "mcc": None,
                 "bin": None,
                 "is_new_device": None,
-                # Crypto fields (unused for ACH)
+
+                # Crypto fields
                 "from_wallet_id": None,
                 "to_wallet_id": None,
                 "wallet_age_days": None,
@@ -177,10 +192,11 @@ def generate_ach_transactions(users: pd.DataFrame, n: int = 2000) -> pd.DataFram
 
 def generate_card_transactions(users: pd.DataFrame, n: int = 2500) -> pd.DataFrame:
     """
-    Generate CARD-style transactions. We'll include:
-    - card_present (True/False)
-    - MCC and BIN
-    - is_new_device (simple proxy)
+    Generate CARD-style transactions.
+
+    Improvement:
+    - Inject a small number of high-value online card transactions on new devices
+      so the CARD REVIEW control fires more than a handful of times.
     """
     rows: List[Dict] = []
 
@@ -196,14 +212,21 @@ def generate_card_transactions(users: pd.DataFrame, n: int = 2500) -> pd.DataFra
         u = users.sample(1).iloc[0]
 
         card_present = random.random() < 0.15  # most are online (False)
+
+        # Base amount distribution
         amount = round(abs(random.gauss(mu=60, sigma=120)), 2)
         amount = max(1.0, min(amount, 3500.0))
 
         mcc = random.choices(mcc_options, weights=mcc_weights, k=1)[0]
         bin_num = random.choices(bin_options, weights=bin_weights, k=1)[0]
 
-        # is_new_device: pretend newer accounts more often use "new device" (simple proxy)
+        # is_new_device proxy
         is_new_device = (u["account_age_days"] < 30) and (random.random() < 0.5)
+
+        # ✅ Improvement B: Inject some higher value online transactions on new devices
+        # This helps your REVIEW control appear in the dashboard more consistently.
+        if is_new_device and (card_present is False) and random.random() < 0.06:
+            amount = round(random.uniform(850, 2500), 2)
 
         rows.append(
             {
@@ -213,16 +236,22 @@ def generate_card_transactions(users: pd.DataFrame, n: int = 2500) -> pd.DataFra
                 "user_id": u["user_id"],
                 "device_id": u["device_id"],
                 "country": u["country"],
+
+                "account_age_days": int(u["account_age_days"]),
+
                 "amount": amount,
                 "currency": "USD",
+
                 # ACH fields
                 "funding_speed": None,
                 "return_code": None,
-                # Card-specific fields
+
+                # Card fields
                 "card_present": bool(card_present),
                 "mcc": int(mcc),
                 "bin": int(bin_num),
                 "is_new_device": bool(is_new_device),
+
                 # Crypto fields
                 "from_wallet_id": None,
                 "to_wallet_id": None,
@@ -236,7 +265,9 @@ def generate_card_transactions(users: pd.DataFrame, n: int = 2500) -> pd.DataFra
 
 def generate_crypto_transactions(users: pd.DataFrame, wallets: pd.DataFrame, n: int = 1800) -> pd.DataFrame:
     """
-    Generate CRYPTO-style transfers. We'll include:
+    Generate CRYPTO-style transfers.
+
+    Includes:
     - from_wallet_id, to_wallet_id
     - wallet_age_days (age of FROM wallet)
     - to_is_high_risk (flag for known bad counterparty)
@@ -247,11 +278,9 @@ def generate_crypto_transactions(users: pd.DataFrame, wallets: pd.DataFrame, n: 
     high_risk_wallets = set(wallets.sample(int(len(wallets) * 0.03))["wallet_id"].tolist())
 
     for i in range(n):
-        # Pick a sender wallet
         sender = wallets.sample(1).iloc[0]
         sender_user = users[users["user_id"] == sender["user_id"]].iloc[0]
 
-        # Pick a recipient wallet (can be high-risk sometimes)
         recipient = wallets.sample(1).iloc[0]
 
         # Probability of sending to a high-risk wallet (small but present)
@@ -262,7 +291,7 @@ def generate_crypto_transactions(users: pd.DataFrame, wallets: pd.DataFrame, n: 
             recipient_wallet_id = recipient["wallet_id"]
             to_is_high_risk = recipient_wallet_id in high_risk_wallets
 
-        # Amount in "crypto units" (e.g., BTC). Keep small realistic-ish amounts, but with tails.
+        # Amount in "crypto units"
         amount = round(abs(random.gauss(mu=0.25, sigma=0.6)), 6)
         amount = max(0.0005, min(amount, 25.0))
 
@@ -271,20 +300,26 @@ def generate_crypto_transactions(users: pd.DataFrame, wallets: pd.DataFrame, n: 
                 "tx_id": make_id("crypto_tx", i),
                 "rail": "CRYPTO",
                 "timestamp": rand_date_within_days(45),
-                # Use the user who owns the sender wallet
+
                 "user_id": sender["user_id"],
                 "device_id": sender_user["device_id"],
                 "country": sender_user["country"],
+
+                "account_age_days": int(sender_user["account_age_days"]),
+
                 "amount": amount,
                 "currency": "CRYPTO",
+
                 # ACH fields
                 "funding_speed": None,
                 "return_code": None,
+
                 # Card fields
                 "card_present": None,
                 "mcc": None,
                 "bin": None,
                 "is_new_device": None,
+
                 # Crypto fields
                 "from_wallet_id": sender["wallet_id"],
                 "to_wallet_id": recipient_wallet_id,
@@ -304,8 +339,6 @@ def inject_device_sharing(users: pd.DataFrame, share_rate: float = 0.08) -> pd.D
     """
     Introduce a simple "device sharing" effect: some users share device_id values.
     This mimics situations like account farms or synthetic identity clusters.
-
-    We do this by selecting some device_ids and assigning them to multiple users.
     """
     users = users.copy()
 
@@ -313,10 +346,8 @@ def inject_device_sharing(users: pd.DataFrame, share_rate: float = 0.08) -> pd.D
     if n_share <= 0:
         return users
 
-    # Pick a few "shared" devices
     shared_devices = [f"dev_{random.randint(1, 30):05d}" for _ in range(max(3, n_share // 10))]
 
-    # Assign shared devices to a subset of users
     idxs = users.sample(n_share).index
     for idx in idxs:
         users.loc[idx, "device_id"] = random.choice(shared_devices)
@@ -331,43 +362,33 @@ def inject_device_sharing(users: pd.DataFrame, share_rate: float = 0.08) -> pd.D
 def main() -> None:
     ensure_data_dir()
 
-    # 1) Create entities
     users = generate_users(n_users=500)
-
-    # Inject some device sharing to create realistic clustering signals
     users = inject_device_sharing(users, share_rate=0.10)
-
     wallets = generate_wallets(users)
 
-    # 2) Create transactions by rail
     ach = generate_ach_transactions(users, n=2000)
     card = generate_card_transactions(users, n=2500)
     crypto = generate_crypto_transactions(users, wallets, n=1800)
 
-    # 3) Combine into one dataset
     combined = pd.concat([ach, card, crypto], ignore_index=True)
 
-    # 4) Add a simple synthetic "is_fraud_pattern" label
-    # This is NOT "real fraud detection" - it's a label we can use later to measure controls.
+    # Synthetic label to evaluate controls (proxy)
     combined["is_fraud_pattern"] = False
 
-    # Label some patterns for evaluation:
-    # - ACH: instant + high amount + new account
     ach_mask = (
         (combined["rail"] == "ACH")
         & (combined["funding_speed"] == "instant")
         & (combined["amount"] > 5000)
+        & (combined["account_age_days"] < 30)
     )
 
-    # - CARD: high amount + new device + not card present
     card_mask = (
         (combined["rail"] == "CARD")
-        & (combined["card_present"] == False)  # noqa: E712 (intentional for pandas)
+        & (combined["card_present"] == False)  # noqa: E712
         & (combined["amount"] > 800)
         & (combined["is_new_device"] == True)  # noqa: E712
     )
 
-    # - CRYPTO: to high risk counterparty OR new wallet + large send
     crypto_mask = (
         (combined["rail"] == "CRYPTO")
         & (
@@ -378,7 +399,6 @@ def main() -> None:
 
     combined.loc[ach_mask | card_mask | crypto_mask, "is_fraud_pattern"] = True
 
-    # 5) Save
     out_path = "data/combined_transactions.csv"
     combined.to_csv(out_path, index=False)
 
@@ -389,3 +409,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
